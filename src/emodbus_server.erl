@@ -44,11 +44,17 @@ start_link(SockArgs, Handler) ->
 	{ok, proc_lib:spawn_link(?MODULE, init, [[SockArgs, Handler]])}.
 
 init([SockArgs = {Transport, _Sock, _SockFun}, Handler]) ->
+    io:format("============>> emodbus_server init called~n"),
+    io:format("============>> Transport: ~p~n", [Transport]),
     {ok, NewSock} = esockd_connection:accept(SockArgs),
+    io:format("============>> Socket accepted: ~p~n", [NewSock]),
+    {ok, SockOpts} = Transport:getopts(NewSock, [active, packet, mode]),
+    io:format("============>> Socket options after accept: ~p~n", [SockOpts]),
     State = #state{transport = Transport,
                    socket    = NewSock,
                    parser    = parser(),
                    handler   = Handler},
+    io:format("============>> Calling run_sock to set active once~n"),
     gen_server:enter_loop(?MODULE, [], run_sock(State)).
 
 handle_call(_Request, _From, State) ->
@@ -60,6 +66,12 @@ handle_cast(_Msg, State) ->
 handle_info({tcp, Sock, Data}, State=#state{transport = Transport, socket = Sock}) ->
 	{ok, PeerName} = Transport:peername(Sock),
 	io:format("~s - ~p~n", [esockd_net:format(peername, PeerName), Data]),
+    io:format("============>> Modbus TCP Server Received~n"),
+    io:format("================>>  Client Socket: ~p~n", [Sock]),
+    io:format("================>>  Client Address: ~s~n", [esockd_net:format(peername, PeerName)]),
+    io:format("================>>  Binary Data: ~p~n", [Data]),
+    io:format("================>>  Data Length: ~p bytes~n", [byte_size(Data)]),
+    io:format("================>>  Hex: ~s~n", [binary:encode_hex(Data)]),
     received(Data, run_sock(State));
 
 handle_info({tcp_error, Sock, Reason}, State=#state{socket = Sock}) ->
@@ -115,7 +127,16 @@ send(Frame, #state{transport = Transport, socket = Sock}) ->
     Transport:send(Sock, serialize(Frame)).
 
 run_sock(State=#state{transport = Transport, socket = Sock}) ->
-    Transport:setopts(Sock, [{active, once}]), State.
+    Result = Transport:setopts(Sock, [{active, once}]),
+    io:format("============>> run_sock setopts result: ~p, Socket: ~p~n", [Result, Sock]),
+    case Result of
+        ok ->
+            State;
+        {error, Reason} ->
+            io:format("============>> ERROR: Failed to set socket active mode: ~p~n", [Reason]),
+            error_logger:error_msg("Failed to set socket ~p to active once: ~p", [Sock, Reason]),
+            State
+    end.
 
 %% parser
 parser() ->
